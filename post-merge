@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+import sys
+import subprocess
+import os
+import json
+import urllib.request
+from subprocess import CalledProcessError
+
+if os.getenv("SKIP_AI"):
+    sys.exit(0)
+print("-----------------------------------")
+print("  🚀 GIT PULL SUMMARIZER IS RUNNING")
+print("-----------------------------------")
+
+def call_openai_summarizer(project_context, git_diff):
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        print("❌ Error: OPENAI_API_KEY not found in environment variables.")
+        return None
+
+    url = "https://api.openai.com/v1/chat/completions"
+    
+    # --- THE SYSTEM PROMPT ---
+    system_prompt = (
+        "És um Engenheiro de Software Sénior especialista em rever alterações de código. "
+        "O teu objetivo é resumir um 'git pull' para um programador. "
+        "Regras:\n"
+        "1. Sê conciso, mas perspicaz. Foca-te no 'Porquê' e no 'Como'.\n"
+        "2. Agrupa as alterações por tema lógico (ex.: 'Atualizações de API', 'Refactorização', 'Configuração').\n"
+        "3. Usa emojis para facilitar a leitura (ex.: 🐛 para correções, ✨ para novas funcionalidades).\n"
+        "4. Se detetares potenciais riscos de segurança ou alterações que quebrem a compatibilidade ('breaking changes'), destaca-os a negrito.\n"
+        "5. Não listes cada ficheiro individualmente; resume o IMPACTO das alterações."
+    )
+
+    # --- THE USER PROMPT ---
+    user_prompt = (
+        f"Aqui está a estrutura de alto nível do projeto para contexto:\n{project_context}\n\n"
+        f"Aqui está o 'git diff' bruto das alterações recebidas:\n{git_diff}"
+    )
+
+    data = {
+        "model": "gpt-5.1",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.5,
+    }
+
+    try:
+        req = urllib.request.Request(
+            url, 
+            data=json.dumps(data).encode('utf-8'),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}"
+            }
+        )
+        
+        with urllib.request.urlopen(req) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            return result['choices'][0]['message']['content']
+
+    except Exception as e:
+        return f"❌ OpenAI Call Failed: {str(e)}"
+
+try:
+	#git_diff = ["git", "diff", "HEAD~1..HEAD"]
+	git_diff = ["git", "diff", "ORIG_HEAD..HEAD"]
+	text = subprocess.check_output(git_diff)
+	decoded_text = text.decode()
+	list_files_cmd = ["find", ".", "-maxdepth", "4", "-not", "-path", "*/.*"]
+	context_text = subprocess.check_output(list_files_cmd).decode()
+	if len(decoded_text) > 8000:
+		print("Aborting, text is way too much")
+		exit(0)
+	print("🤔 Analyzing changes with OpenAI...")
+	summary = call_openai_summarizer(context_text, decoded_text)
+	print("\n" + "="*40)
+	print(summary)
+	print("="*40 + "\n")
+except CalledProcessError:
+	print("⚠️  Could not run git diff (ORIG_HEAD might be missing).")
+except Exception as e:
+    print(f"❌ Script failed: {e}")
